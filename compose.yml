@@ -1,0 +1,90 @@
+# uptermd - self-hosted relay for `upterm` (open-source drop-in replacement
+# for tmate.io, which is shutting down: official servers disable 2026-12-11).
+#
+# Notes verified directly against upstream source/docs before writing this
+# file (github.com/owenthereal/upterm, v0.25.1) - see README.md for details:
+#
+# - UPTERMD_ROUTING=embedded is correct for this single-node deployment
+#   (in-memory session store). `consul`/`auto` only matter for multi-node
+#   clusters.
+# - UPTERMD_NODE_ADDR is intentionally left unset. It's only used to route a
+#   session to the correct *node* in a multi-node Consul cluster
+#   (server/server.go: sidewayConnDialer.Dial compares it against the
+#   requesting node's own address and only dials out on a mismatch). A
+#   single embedded node always matches itself, so nothing ever dials out to
+#   it, and it defaults to the SSH listener's own bind address when unset.
+#   Only set it if this ever becomes a multi-node Consul deployment, to the
+#   externally-reachable host:port other nodes would dial.
+# - The official image (gcr.io/distroless/static:nonroot base, confirmed via
+#   Dockerfile.uptermd) has no shell, curl, or wget, so an HTTP `/health`
+#   healthcheck can't run *inside* the uptermd container - the healthcheck
+#   below only confirms the binary executes (liveness). Real readiness
+#   (GET /health on the ws port, confirmed in server/wsproxy.go - returns
+#   "200 OK") should be checked externally, e.g. from a reverse proxy or
+#   monitoring probe.
+# - No --authorized-keys is configured, so (per server/sshproxy.go's
+#   checkAuthorizedKeys - "nil disables the gate") any SSH public key may
+#   host a session through this relay, matching tmate.io's own open model.
+#   Set UPTERMD_AUTHORIZED_KEYS in .env to restrict who can host sessions.
+# - uptermd generates a throwaway in-memory SSH host key on every start if
+#   none is configured (utils.CreateSigners), which would make joiners see a
+#   "host key changed" warning on every container restart. The uptermd-keygen
+#   init service below generates a real ed25519 host key into a shared
+#   volume once, on first bring-up only, so it survives restarts/upgrades.
+# - The uptermd image runs as uid 65532 (distroless "nonroot" - confirmed via
+#   `docker inspect ... --format '{{.Config.User}}'`), but the keygen
+#   container generates the key as root. Without the explicit chown below,
+#   uptermd can't read a root-owned 0600 key: it fails to open it, and - a
+#   real upstream bug, confirmed by running the image directly and reading
+#   its source - server.Start() silently swallows that read error and
+#   returns nil instead of propagating it, so the container just exits 0
+#   with zero log output instead of a visible error. Caught by actually
+#   running `docker compose up` and finding an unexplained silent restart
+#   loop, not by inspection alone.
+
+services:
+  uptermd-keygen:
+    image: alpine:3.22.5
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ ! -f /data/host_key ]; then
+          apk add --no-cache openssh-keygen >/dev/null
+          ssh-keygen -t ed25519 -f /data/host_key -N "" -C uptermd
+          chown 65532:65532 /data/host_key /data/host_key.pub
+        fi
+    volumes:
+      - uptermd_keys:/data
+    restart: "no"
+
+  uptermd:
+    image: ghcr.io/owenthereal/upterm/uptermd:v0.25.1
+    depends_on:
+      uptermd-keygen:
+        condition: service_completed_successfully
+    ports:
+      - "2222:2222" # SSH - what `upterm`/`ssh` clients connect through
+      - "8080:8080" # WebSocket + HTTP (/health, /getting-started)
+      # Prometheus metrics (9091) intentionally not published to the host -
+      # scrape it from another container on this compose network if needed.
+    environment:
+      UPTERMD_SSH_ADDR: "[::]:2222"
+      UPTERMD_WS_ADDR: "[::]:8080"
+      UPTERMD_METRIC_ADDR: "[::]:9091"
+      UPTERMD_ROUTING: embedded
+      UPTERMD_PRIVATE_KEY: /data/host_key
+      UPTERMD_AUTHORIZED_KEYS: ${UPTERMD_AUTHORIZED_KEYS:-}
+      UPTERMD_SSH_PROXY_PROTOCOL: ${UPTERMD_SSH_PROXY_PROTOCOL:-false}
+    volumes:
+      - uptermd_keys:/data:ro
+    healthcheck:
+      test: ["CMD", "/app/uptermd", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  uptermd_keys:
