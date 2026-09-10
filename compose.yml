@@ -22,10 +22,14 @@
 #   (GET /health on the ws port, confirmed in server/wsproxy.go - returns
 #   "200 OK") should be checked externally, e.g. from a reverse proxy or
 #   monitoring probe.
-# - No --authorized-keys is configured, so (per server/sshproxy.go's
-#   checkAuthorizedKeys - "nil disables the gate") any SSH public key may
-#   host a session through this relay, matching tmate.io's own open model.
-#   Set UPTERMD_AUTHORIZED_KEYS in .env to restrict who can host sessions.
+# - UPTERMD_AUTHORIZED_KEYS points at a bind-mounted authorized_keys file
+#   (standard OpenSSH format, one pubkey per line) restricting who may HOST a
+#   session through this relay (per server/sshproxy.go's checkAuthorizedKeys
+#   - "nil disables the gate" when unset, which is upstream's open-to-anyone
+#   default, matching tmate.io's own model). This does NOT gate who may JOIN
+#   a session someone else is already hosting - that's the per-session token,
+#   unchanged. The file itself (./authorized_keys) is gitignored, same as
+#   .env - see authorized_keys.example and README.md for how to add keys.
 # - uptermd generates a throwaway in-memory SSH host key on every start if
 #   none is configured (utils.CreateSigners), which would make joiners see a
 #   "host key changed" warning on every container restart. The uptermd-keygen
@@ -74,10 +78,11 @@ services:
       UPTERMD_METRIC_ADDR: "[::]:9091"
       UPTERMD_ROUTING: embedded
       UPTERMD_PRIVATE_KEY: /data/host_key
-      UPTERMD_AUTHORIZED_KEYS: ${UPTERMD_AUTHORIZED_KEYS:-}
+      UPTERMD_AUTHORIZED_KEYS: /config/authorized_keys
       UPTERMD_SSH_PROXY_PROTOCOL: ${UPTERMD_SSH_PROXY_PROTOCOL:-false}
     volumes:
       - uptermd_keys:/data:ro
+      - ./authorized_keys:/config/authorized_keys:ro
     healthcheck:
       test: ["CMD", "/app/uptermd", "version"]
       interval: 30s

@@ -6,8 +6,9 @@ This replaces [tmate.io](https://tmate.io) — its official relay servers are sh
 
 ## Deploying
 
-1. Copy `.env.example` to `.env`. Everything in it is optional — uptermd runs fine with none of it set; see the comments in `.env.example` for what each knob does (restricting who may host sessions, PROXY protocol for a TCP reverse proxy).
-2. Start the stack:
+1. Copy `.env.example` to `.env`. Everything in it is optional — uptermd runs fine with none of it set; see the comments in `.env.example` for what each knob does (PROXY protocol for a TCP reverse proxy).
+2. Copy `authorized_keys.example` to `authorized_keys` and add the public key(s) allowed to **host** sessions through this relay (standard OpenSSH `authorized_keys` format, one key per line). This does not gate who may _join_ a session someone else is already hosting — that's the per-session token, unchanged. To add another key later: append a line and `docker compose restart uptermd`.
+3. Start the stack:
 
    ```bash
    docker compose up -d
@@ -15,14 +16,14 @@ This replaces [tmate.io](https://tmate.io) — its official relay servers are sh
 
    On first start, the `uptermd-keygen` service generates a persistent SSH host key into a named volume before `uptermd` starts (so joiners don't get a "host key changed" warning on every container restart — see the comments in `compose.yml`).
 
-3. `uptermd` listens on:
+4. `uptermd` listens on:
    - `2222` — SSH, what `upterm`/`ssh` clients connect through
    - `8080` — WebSocket + HTTP (`/health` for a liveness probe, `/getting-started` for connection instructions)
    - `9091` — Prometheus metrics (container-internal only, not published to the host)
 
-   Put a reverse proxy in front of `8080` for TLS/your real domain if exposing this beyond a LAN. `2222` is raw SSH and doesn't need one.
+   Put a reverse proxy in front of `8080` for TLS/your real domain if exposing this beyond a LAN. `2222` is raw SSH and doesn't need one — a TCP-mode stream proxy in front of it works, but Zoraxy (or whatever's routing `*.gavva.dev`) has to actually support TCP/UDP stream proxying, not just HTTP virtual hosting, since SSH doesn't carry the hostname the way TLS SNI/HTTP `Host:` does.
 
-4. From a client machine:
+5. From a client machine:
 
    ```bash
    upterm host --server ssh://<this-host>:2222 -- bash

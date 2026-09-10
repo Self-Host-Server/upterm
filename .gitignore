@@ -1,5 +1,6 @@
 .lh
 .env
+authorized_keys
 .vscode
 .giga
 .cursor

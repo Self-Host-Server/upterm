@@ -1,0 +1,11 @@
+# Public keys authorized to HOST a session through this uptermd relay.
+# Standard OpenSSH authorized_keys format: one public key per line
+# (ssh-ed25519 AAAA... / ssh-rsa AAAA... / ecdsa-sha2-... AAAA...).
+#
+# This does NOT gate who may JOIN a session someone else is already
+# hosting - that's controlled by the per-session token instead.
+#
+# Copy this file to `authorized_keys` (gitignored, same as .env) and add
+# real keys. To authorize another machine later: append its public key
+# (the contents of its ~/.ssh/id_ed25519.pub or similar) as a new line,
+# then `docker compose restart uptermd` to pick up the change.
